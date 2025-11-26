@@ -1,6 +1,3 @@
-✅ README.md for your project
-
-Create a new file called README.md in your project root and paste this:
 
 # ⚖️ BNS Legal AI Assistant
 
@@ -143,6 +140,7 @@ Improved section linking
 Performance optimization
 
 Open to collaborations and suggestions ✨
+
 
 
 
