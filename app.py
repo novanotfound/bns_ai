@@ -7,6 +7,8 @@ import gc
 import sys
 import warnings
 from datetime import datetime
+import uuid
+
 from hyde_query_3 import LegalSearchEngine 
 
 # --- CONFIG & SUPPRESSION ---
@@ -20,7 +22,6 @@ if not sys.warnoptions:
 # --- LOGGER ---
 def log(msg, icon="🖥️"):
     timestamp = datetime.now().strftime("%H:%M:%S")
-    # Using 'flush=True' ensures logs appear immediately in the terminal
     print(f"[{timestamp}] {icon} {msg}", flush=True)
 
 # --- HELPER: Async Runner ---
@@ -56,10 +57,57 @@ def load_raw_data():
     log("Graph Data Cached Successfully.", "💾")
     return graph, temp_engine.node_embeddings, temp_engine.node_names
 
+# --- CHAT MANAGEMENT HELPERS ---
+
+def _init_chats_state():
+    """
+    Initialize multi-chat state if not already present.
+    Structure:
+    st.session_state.chats = {
+        chat_id: {
+            "title": str,
+            "messages": [ {role, content, ...}, ... ]
+        },
+        ...
+    }
+    st.session_state.active_chat_id = chat_id
+    """
+    if "chats" not in st.session_state:
+        chat_id = str(uuid.uuid4())[:8]
+        st.session_state.chats = {
+            chat_id: {"title": "New chat", "messages": []}
+        }
+        st.session_state.active_chat_id = chat_id
+
+def create_new_chat():
+    """Create a new empty chat and make it active."""
+    chat_id = str(uuid.uuid4())[:8]
+    st.session_state.chats[chat_id] = {"title": "New chat", "messages": []}
+    st.session_state.active_chat_id = chat_id
+    return chat_id
+
+def auto_name_chat_if_needed(chat_id, first_user_message: str):
+    """
+    If the chat still has the default 'New chat' title,
+    auto-name it from the first user message (truncated).
+    """
+    chat = st.session_state.chats.get(chat_id)
+    if not chat:
+        return
+    if chat["title"] == "New chat":
+        title = first_user_message.strip().replace("\n", " ")
+        if len(title) > 40:
+            title = title[:40] + "..."
+        if not title:
+            title = "New chat"
+        chat["title"] = title
+
 # --- INITIALIZATION ---
 log("Initializing UI Session...", "🚀")
+_init_chats_state()
+
 st.title("⚖️ BNS Legal Expert AI")
-st.caption("Full BNS Knowledge Graph • Memory Enabled • Critic Verified")
+st.caption("Full BNS Knowledge Graph • Multi-Chat • Critic Verified")
 
 graph_data, embeddings, node_names = load_raw_data()
 
@@ -68,17 +116,39 @@ if graph_data is not None:
     current_engine.graph = graph_data
     current_engine.node_embeddings = embeddings
     current_engine.node_names = node_names
-    st.sidebar.success(f"Graph Active: {len(node_names)} Nodes")
 else:
     st.error(f"Graph file not found at {GRAPH_PATH}")
     current_engine = None
 
-# --- GRAPH INSPECTOR (Sidebar) ---
+# --- SIDEBAR: CHATS + GRAPH INSPECTOR ---
 with st.sidebar:
+    st.header("💬 Conversations")
+
+    chats = st.session_state.chats
+    chat_ids = list(chats.keys())
+
+    # Active chat default
+    active_chat_id = st.session_state.get("active_chat_id", chat_ids[0])
+
+    # Chat selector
+    selected_chat_id = st.radio(
+        "Select a conversation:",
+        chat_ids,
+        index=chat_ids.index(active_chat_id),
+        format_func=lambda cid: chats[cid]["title"]
+    )
+    st.session_state.active_chat_id = selected_chat_id
+    active_chat_id = selected_chat_id
+
+    # New chat button
+    if st.button("➕ New Chat"):
+        new_id = create_new_chat()
+        st.rerun()
+
     st.markdown("---")
     st.header("Graph Inspector 🕵️")
     node_search = st.text_input("Check if node exists:", placeholder="e.g. Section 303")
-    
+
     if node_search and current_engine:
         log(f"User inspecting node: {node_search}", "🔍")
         found = False
@@ -91,12 +161,15 @@ with st.sidebar:
             st.error(f"❌ Node '{node_search}' NOT found.")
             log(f"Inspector failed to find: {node_search}", "❌")
 
-# --- CHAT HISTORY STATE ---
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+    if current_engine and current_engine.node_names is not None:
+        st.sidebar.success(f"Graph Active: {len(current_engine.node_names)} Nodes")
+
+# --- CURRENT CHAT DATA ---
+current_chat = st.session_state.chats[active_chat_id]
+current_messages = current_chat["messages"]
 
 # --- RENDER CHAT HISTORY ---
-for message in st.session_state.messages:
+for message in current_messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
@@ -123,8 +196,14 @@ for message in st.session_state.messages:
 # --- MAIN CHAT INPUT / EXECUTION ---
 if prompt := st.chat_input("Describe a situation or ask about a BNS section..."):
     log(f"User Prompt Received: {prompt}", "👤")
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    
+
+    # Auto-name chat if this is first user message
+    if len(current_messages) == 0:
+        auto_name_chat_if_needed(active_chat_id, prompt)
+
+    # Append user message to this chat
+    current_messages.append({"role": "user", "content": prompt})
+
     with st.chat_message("user"):
         st.markdown(prompt)
 
@@ -134,9 +213,9 @@ if prompt := st.chat_input("Describe a situation or ask about a BNS section...")
             message_placeholder.markdown("🔍 Consulting Knowledge Graph & LLM...")
 
             try:
-                # --- MEMORY STRING (last few turns) ---
+                # --- MEMORY STRING (last few turns of THIS chat) ---
                 history_str = ""
-                for msg in st.session_state.messages[-5:]:
+                for msg in current_messages[-5:]:
                     role_name = "User" if msg["role"] == "user" else "Bot"
                     history_str += f"{role_name}: {msg['content']}\n"
                 
@@ -190,14 +269,14 @@ if prompt := st.chat_input("Describe a situation or ask about a BNS section...")
                     with st.expander("View Legal Evidence"):
                         st.dataframe(df, hide_index=True)
                     
-                    st.session_state.messages.append({
+                    current_messages.append({
                         "role": "assistant",
                         "content": answer,
                         "debug_data": df,
                         "critique": critique
                     })
                 else:
-                    st.session_state.messages.append({
+                    current_messages.append({
                         "role": "assistant",
                         "content": answer,
                         "critique": critique
