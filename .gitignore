@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual environment
+venv/
+.env
+
+# Streamlit cache
+.streamlit/
+
+# OS stuff
+.DS_Store
+
+# Large generated or local files
+node_embeddings.npy
+*.log
