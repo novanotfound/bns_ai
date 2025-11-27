@@ -8,6 +8,9 @@ import sys
 import warnings
 from datetime import datetime
 import uuid
+import json
+import numpy as np
+
 
 from hyde_query_3 import LegalSearchEngine 
 
@@ -41,21 +44,38 @@ def run_async(coro):
 @st.cache_resource
 def load_raw_data():
     log("Streamlit Cache Miss: Loading Graph Data...", "💾")
-    
+
     if not os.path.exists(GRAPH_PATH):
         log(f"Graph Not Found at {GRAPH_PATH}", "❌")
         return None, None, None
 
     graph = nx.read_graphml(GRAPH_PATH)
-    temp_engine = LegalSearchEngine(GRAPH_PATH)
-    
-    log("Building Embeddings for Cache...", "🧱")
-    with st.spinner("🧠 Building Neural Index (One-time setup)..."):
-        run_async(temp_engine.build_runtime_index())
-    
+
+    # 🔹 Try to load precomputed embeddings & node names
+    emb_path = "node_embeddings.npy"
+    names_path = "node_names.json"
+
+    embeddings = None
+    node_names = None
+
+    if os.path.exists(emb_path) and os.path.exists(names_path):
+        log("Loading precomputed embeddings from disk...", "🧠")
+        embeddings = np.load(emb_path)
+        with open(names_path, "r", encoding="utf-8") as f:
+            node_names = json.load(f)
+        log(f"Loaded {embeddings.shape[0]} embeddings.", "✅")
+    else:
+        # Fallback: build at runtime (only needed locally or first time)
+        log("Precomputed embeddings not found. Building at runtime...", "⚙️")
+        temp_engine = LegalSearchEngine(GRAPH_PATH)
+        with st.spinner("🧠 Building Neural Index (One-time setup)..."):
+            run_async(temp_engine.build_runtime_index())
+        embeddings = temp_engine.node_embeddings
+        node_names = temp_engine.node_names
+
     gc.collect()
     log("Graph Data Cached Successfully.", "💾")
-    return graph, temp_engine.node_embeddings, temp_engine.node_names
+    return graph, embeddings, node_names
 
 # --- CHAT MANAGEMENT HELPERS ---
 
